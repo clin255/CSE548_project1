@@ -6,7 +6,7 @@
 #   										#
 # 02/17/2020  Created by Dijiang Huang ASU SNAC Lab    		    		#
 # updated 05/12/2021								#
-# updated 05/20/2023 - Changjian Lin		  				#
+# updated 05/27/2023 - Changjian Lin		  				#
 #################################################################################
 #                                                                               #
 #                                                                               #
@@ -82,7 +82,7 @@ NAT_WEB_IP_ADDRESS="10.0.2.1"
 #
 # DNS Addresses
 #
-DNS1="8.8.8.8"
+DNS1="75.75.75.75"
 
 ####
 # 1.4 IPTables Configuration.
@@ -268,9 +268,6 @@ $IPTABLES -P FORWARD DROP
 # Provide your forwarding rules below
 #
 
-# example of checking bad tcp packets
-#$IPTABLES -A FORWARD -p tcp -j bad_tcp_packets
-
 # Allow http traffic from client network to server network
 #$IPTABLES -A FORWARD -i $Client_NET_IFACE -o $Internet_IFACE -j ACCEPT
 
@@ -283,18 +280,16 @@ fi
 # Allows ping to some DNS servers
 $IPTABLES -A FORWARD -p ICMP -i $Client_NET_IFACE -o $Internet_IFACE -d 8.8.8.8 -j ACCEPT
 $IPTABLES -A FORWARD -p ICMP -i $Client_NET_IFACE -o $Internet_IFACE -d $DNS1 -j ACCEPT
+
 # Allows DNS resolution
 $IPTABLES -A FORWARD -p UDP  -i $Client_NET_IFACE -o $Internet_IFACE --dport 53 -d $DNS1 -j ACCEPT
-$IPTABLES -A FORWARD -p UDP  -i $Client_NET_IFACE -o $Internet_IFACE --dport 53 -d $DNS2 -j ACCEPT
 $IPTABLES -A FORWARD -p UDP  -i $Client_NET_IFACE -o $Internet_IFACE --sport 53 -s $DNS1 -j ACCEPT
-$IPTABLES -A FORWARD -p UDP  -i $Client_NET_IFACE -o $Internet_IFACE --sport 53 -s $DNS2 -j ACCEPT
+
 # Allows return packets from established connections
 $IPTABLES -A FORWARD -o $Client_NET_IFACE -i $Internet_IFACE -m state --state RELATED,ESTABLISHED -j ACCEPT
-# Logging
-$IPTABLES -A FORWARD -j LOG --log-prefix SKIPPED-FORWARD-
 
-# example of using allowed
-#$IPTABLES -A FORWARD -p tcp -j allowed
+# FORWARD default policy 
+$IPTABLES -P FORWARD DROP
 
 
 #####
@@ -305,16 +300,17 @@ $IPTABLES -A FORWARD -j LOG --log-prefix SKIPPED-FORWARD-
 # Provide your input rules below to allow web traffic from client
 #
 
-# Allows loopback traffic resolution
-$IPTABLES -A INPUT -i lo -j ACCEPT
-$IPTABLES -A INPUT -i lo -s 127.0.0.0/8 -j ACCEPT
-$IPTABLES -A INPUT ! -i lo -s 127.0.0.0/8 -j REJECT
-# Allows SYN and return packets from established connections
-$IPTABLES -A INPUT -p TCP --syn -j ACCEPT
-$IPTABLES -A INPUT -p TCP -m state --state ESTABLISHED,RELATED -j ACCEPT
+# Block loopback ping
+$IPTABLES -A INPUT -p ICMP --icmp-type echo-request -i $LO_IFACE         -d $LO_IP -j REJECT
+$IPTABLES -A INPUT -p ICMP --icmp-type echo-reply   -i $LO_IFACE         -d $LO_IP -j REJECT
+
 # Allows loopback and client host to connect to the local web server on the Gateway
 $IPTABLES -A INPUT -p TCP  --dport 80  -i $LO_IFACE         -d $WEB_IP_ADDRESS -j ACCEPT
 $IPTABLES -A INPUT -p TCP  --dport 80  -i $Client_NET_IFACE -d $Client_NET_IP -j ACCEPT
+
+# Allows SYN and return packets from established connections
+$IPTABLES -A INPUT -p TCP --syn -j ACCEPT
+$IPTABLES -A INPUT -p TCP -m state --state ESTABLISHED,RELATED -j ACCEPT
 
 # Allow traffic to HTTP/HTTPS for the Gateway - used for Ubuntu updates.
 # 
@@ -322,20 +318,18 @@ if [ "$GW_Allowed_Web" == "Y" ]; then
 	$IPTABLES -A INPUT -p TCP  -i $Internet_IFACE --sport 80  -j ACCEPT
 	$IPTABLES -A INPUT -p TCP  -i $Internet_IFACE --sport 443 -j ACCEPT
 fi
-# Allows ping to some DNS servers
-$IPTABLES -A INPUT -p ICMP -i $Internet_IFACE -s 8.8.8.8 -j ACCEPT
+
+# Allows ping to some DNS servers but block 8.8.8.8
+$IPTABLES -A INPUT -p ICMP -i $Internet_IFACE -s 8.8.8.8 -j REJECT 
 $IPTABLES -A INPUT -p ICMP -i $Internet_IFACE -s $DNS1 -j ACCEPT
-# Generally allows ping to the Gateway from the client, and from the gateway towards the internet
-$IPTABLES -A INPUT -p ICMP --icmp-type echo-request -i $Client_NET_IFACE -d $Client_NET_IP -j ACCEPT
-$IPTABLES -A INPUT -p ICMP --icmp-type echo-request -i $LO_IFACE         -d $WEB_IP_ADDRESS -j ACCEPT
-# Allows loopback ping
-$IPTABLES -A INPUT -p ICMP --icmp-type echo-request -i $LO_IFACE         -d $LO_IP -j ACCEPT
-$IPTABLES -A INPUT -p ICMP --icmp-type echo-reply   -i $LO_IFACE         -d $LO_IP -j ACCEPT
+
 # Allows DNS traffic
 $IPTABLES -A INPUT -p UDP  -i $Internet_IFACE --sport 53 -s $DNS1 -j ACCEPT
 $IPTABLES -A INPUT -p UDP  --dport 53 -d $DNS1 -j ACCEPT
-# Logging
-$IPTABLES -A INPUT -j LOG --log-prefix DROPPED-INGRESS-
+
+# INPUT default policy 
+$IPTABLES -P INPUT DROP
+
 
 #####
 # 4.3 OUTPUT chain
@@ -347,12 +341,15 @@ $IPTABLES -A INPUT -j LOG --log-prefix DROPPED-INGRESS-
 # Fixes loopback on output chain
 $IPTABLES -A OUTPUT -o $LO_IFACE -j ACCEPT
 $IPTABLES -A OUTPUT -o $LO_IFACE -s 127.0.0.0/8 -j ACCEPT
+
 # Allows SYN and return packets from established connections
 $IPTABLES -A OUTPUT -p TCP  -m state --state ESTABLISHED,RELATED    -j ACCEPT
+
 # Allows DNS traffic
 $IPTABLES -A OUTPUT -p UDP  --sport 53 -d 127.0.0.53        		-j ACCEPT
 $IPTABLES -A OUTPUT -p UDP  --sport 53 -d $DNS1    					-j ACCEPT
 $IPTABLES -A OUTPUT -p UDP  --dport 53 -d $DNS1    					-j ACCEPT
+
 # Allows client and loopback to reach web server on the gateway
 $IPTABLES -A OUTPUT -p TCP  --sport 80 -o $Client_NET_IFACE -j ACCEPT
 $IPTABLES -A OUTPUT -p TCP  --sport 80 -o $LO_IFACE         -j ACCEPT
@@ -365,12 +362,11 @@ if [ "$GW_Allowed_Web" == "Y" ]; then
 	$IPTABLES -A OUTPUT -p TCP  --dport 80  -o $Internet_IFACE  -j ACCEPT
 	$IPTABLES -A OUTPUT -p TCP  --dport 443 -o $Internet_IFACE  -j ACCEPT
 fi
-# Logging
-$IPTABLES -A OUTPUT -j LOG --log-prefix DROPPED-EGRESS-
 
-# example Allowed ping message back to client 
+# OUTPUT default policy 
+$IPTABLES -P OUTPUT DROP
 
-#$IPTABLES -A OUTPUT -p icmp -j ACCEPT
+
 
 #####################################################################
 #                                                                   #
@@ -408,13 +404,12 @@ $IPTABLES -A OUTPUT -j LOG --log-prefix DROPPED-EGRESS-
 # Allows client to ping some DNS servers
 $IPTABLES -t nat -A POSTROUTING -p icmp -o $Internet_IFACE -d 8.8.8.8 -j MASQUERADE
 $IPTABLES -t nat -A POSTROUTING -p icmp -o $Internet_IFACE -d $DNS1 -j MASQUERADE
+
 # Allows client DNS resolution
 $IPTABLES -t nat -A POSTROUTING -p udp -o $Internet_IFACE -d $DNS1 -j MASQUERADE
+
 # Allow internet traffic to HTTP/HTTPS for the client - used for Ubuntu updates.
-# 
 if [ "$Client_Allowed_Web" == "Y" ]; then
 	$IPTABLES -t nat -A POSTROUTING -p tcp -o $Internet_IFACE --dport 80 -j MASQUERADE
 	$IPTABLES -t nat -A POSTROUTING -p tcp -o $Internet_IFACE --dport 443 -j MASQUERADE
 fi
-# Logging
-$IPTABLES -t nat -A POSTROUTING -j LOG --log-prefix NO-MASQUERADE-MATCH-
